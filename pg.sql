@@ -2440,41 +2440,42 @@ vWORKING_NEXTDAY  character varying(8);
 BEGIN
 
 pROW_NUM := 0 ;
-SELECT MIN (DT_WORK) INTO  vWORKING_NEXTDAY 
+SELECT MIN (DT_WORK) INTO  vWORKING_NEXTDAY
 FROM dosystem.WBGZT051
 WHERE MK_WORK =  'Y'
 AND DT_WORK >= pNEXT_DEL;
 
     BEGIN
 
-SELECT 
-    1,                       -- ค่า ROWNUM ในที่นี้จะเป็น 1 เสมอเพราะเลือกมาแถวเดียว
-    DLV_KEY_NO, 
-    QT_DELV_DIRCT_BAL, 
+SELECT
+    row_num,
+    DLV_KEY_NO,
+    QT_DELV_DIRCT_BAL,
     DT_DELV
-INTO 
-    pROW_NUM, 
-    pDLV_KEY_NO, 
-    pQT_DELV_DIRCT_BAL, 
+INTO
+    pROW_NUM,
+    pDLV_KEY_NO,
+    pQT_DELV_DIRCT_BAL,
     pDT_DELV
 FROM (
-    SELECT 
-        A.NO_PO || A.MK_PO_CHK_DIGIT AS DLV_KEY_NO, 
+    SELECT
+        ROW_NUMBER() OVER (ORDER BY A.DT_DELV ASC, A.TM_DELV ASC, (A.NO_PO || A.MK_PO_CHK_DIGIT) ASC) AS row_num,
+        A.NO_PO || A.MK_PO_CHK_DIGIT AS DLV_KEY_NO,
         (A.QT_DELV_DIRCT_BAL - COALESCE(B.DELIVERY_COMPLETE, 0)) AS QT_DELV_DIRCT_BAL,
         A.DT_DELV
-    FROM dosystem.T_PUR_PO_FOR_DO_DAILY_J300 A  
+    FROM dosystem.T_PUR_PO_FOR_DO_DAILY_J300 A
     LEFT JOIN (
-        SELECT 
-            PART_NO, 
-            DIM, 
-            SUPPLIER_CD, 
-            DELIVERY_KEY AS KEY, 
+        SELECT
+            PART_NO,
+            DIM,
+            SUPPLIER_CD,
+            DELIVERY_KEY AS KEY,
             SUM(DELIVERY_ORDER) AS DELIVERY_COMPLETE
-        FROM dosystem.T_PRD_DO_RESULT 
+        FROM dosystem.T_PRD_DO_RESULT
         WHERE TO_CHAR(UPDATE_DATE, 'YYYYMMDD') = TO_CHAR(CURRENT_DATE, 'YYYYMMDD')
           AND RESULT = 'WF0000'
           AND DELIVERY_KEY IS NOT NULL
-        GROUP BY PART_NO, DIM, SUPPLIER_CD, DELIVERY_KEY 
+        GROUP BY PART_NO, DIM, SUPPLIER_CD, DELIVERY_KEY
     ) B ON A.NO_PARTS = B.PART_NO
        AND A.NO_ADJ_DIM = B.DIM
        AND A.CD_SPLY = B.SUPPLIER_CD
@@ -2486,11 +2487,9 @@ FROM (
       AND A.QT_DELV_DIRCT_BAL > 0
       AND A.CD_SPLY = pSUPPLIER_CD
       AND A.QT_DELV_DIRCT_BAL <> COALESCE(B.DELIVERY_COMPLETE, 0)
-    ORDER BY 
-        A.DT_DELV ASC, 
-        A.TM_DELV ASC, 
-        (A.NO_PO || A.MK_PO_CHK_DIGIT) ASC
-) 
+) sub
+WHERE row_num > pROW_CNT::integer
+ORDER BY row_num
 LIMIT 1;
             
         EXCEPTION WHEN NO_DATA_FOUND THEN
@@ -2827,14 +2826,20 @@ V_QT_BAL_PO := 0;
      LOOP
         IF V_QT_BAL_PO = 0 THEN
             BEGIN
-                select * from dosystem.p_prd_do_get_dlv_key_no( pFACTORY_CD,
-                                         pPART_NO,          pDIM,              
-                                         pUSE_BLOCK_CD,     pSUPPLIER_CD,
-                                         V_ROW_CNT,         pNEXT_DEL,    
-                                         V_MIN_ROW_NUM,
-                                         v_DLV_KEY_NO,          V_QT_BAL_PO,
-                                         v_CD_DELV_PLACE ,V_MIN_DT_DELV);
-                            
+                SELECT *
+                INTO
+                    V_MIN_ROW_NUM,
+                    v_DLV_KEY_NO,
+                    V_QT_BAL_PO,
+                    v_CD_DELV_PLACE,
+                    V_MIN_DT_DELV
+                FROM dosystem.p_prd_do_get_dlv_key_no(
+                    pFACTORY_CD,
+                    pPART_NO,          pDIM,
+                    pUSE_BLOCK_CD,     pSUPPLIER_CD,
+                    V_ROW_CNT::varchar,         pNEXT_DEL
+                );
+
                         EXCEPTION
                             WHEN OTHERS THEN
                                NULL ;
@@ -2882,13 +2887,9 @@ V_QT_BAL_PO := 0;
                     WHEN OTHERS THEN
                        NULL ;
                 END;
-                --แก้ 11/3/26
-			-- [เพิ่ม 2 บรรทัดนี้ตรงนี้] --
-            V_QT_BAL_PO := NULL;
-            V_QT_BAL_PLAN := 0;
-            --------------------------				
+
             END IF;
-            
+
         ELSIF V_QT_BAL_PO > 0 THEN
             BEGIN
                 IF V_QT_BAL_PLAN > V_QT_BAL_PO THEN
@@ -3037,13 +3038,10 @@ V_QT_BAL_PO := 0;
                     WHEN OTHERS THEN
                        NULL ;
                 END;
-                --Comment 11/3/26
-                --V_QT_BAL_PO := NULL;
-                --V_QT_BAL_PLAN := 0;
+                --Set Value
+                V_QT_BAL_PO := NULL;
+                V_QT_BAL_PLAN := 0;
             END;
-			-- [เพิ่ม 1 บรรทัดนี้ตรงนี้] --
-        	V_QT_BAL_PLAN := 0;
-        	--------------------------
         END IF;
      END LOOP;
     
@@ -3423,11 +3421,7 @@ END;
                                                                                     REC2.CD_SPLY_FACT);
                                                                         EXCEPTION WHEN OTHERS THEN NULL ;
                                                                     END;
-                                                	--แก้ 11/3/26
-													-- [เพิ่ม 2 บรรทัดนี้ตรงนี้] --
-										            V_QT_BAL_PO := NULL;
-										            V_QT_BAL_PLAN := 0;
-										            --------------------------
+
                                                     END IF;
                                             
                                         ELSIF  V_QT_BAL_PO > 0 THEN
@@ -3588,13 +3582,9 @@ END;
                                                     EXCEPTION WHEN OTHERS THEN NULL ;
                                                 END;
                                                 --Set Value
-												/*commemt 11/3/26
                                                 V_QT_BAL_PO := NULL;
                                                 V_QT_BAL_PLAN := 0;
-												*/
                                             END;
-											--แก้ 11/3/26
-											V_QT_BAL_PLAN := 0;
                                         END IF;
                                      END LOOP; -- While
 

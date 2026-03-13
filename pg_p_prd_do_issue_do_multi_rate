@@ -1,0 +1,480 @@
+
+CREATE OR REPLACE FUNCTION dosystem.p_prd_do_issue_do_multi_rate(
+	pfactory_cd character varying,
+	ppart_no character varying,
+	pdim character varying,
+	puse_block_cd character varying,
+	psupplier_cd character varying,
+	pclass character varying,
+	pratio numeric,
+	pnext_del character varying,
+	plogic smallint,
+	pcd_sply_fact character varying,
+	OUT psum_qty_do numeric)
+    RETURNS numeric
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE PARALLEL UNSAFE
+AS $BODY$
+
+DECLARE
+    rec1 record;
+	rec3 record;
+
+v_row_cnt               numeric(4);
+v_qt_bal_plan           numeric(12);
+v_qt_bal_po             numeric(12);
+v_min_row_num           character varying(12);
+v_dlv_key_no            character varying(31);
+v_qt_delv_dirct_bal     character varying(12);
+v_cd_delv_place         character varying(12);
+vflg_in_house           character varying(10) := null;
+v_min_dt_delv           character varying(8);
+
+BEGIN
+-- #Case Result is error
+-- 2.)  Open CUR 1
+    FOR rec1 IN
+				SELECT *
+                FROM dosystem.T_DO_PLAN_REF_DELIVERY_DATE
+                WHERE PLAN_QTY > 0
+                AND COMMENT_MSG <> 'WF0000'
+                AND FACTORY_CD = pFACTORY_CD	
+                AND PART_NO	= pPART_NO
+                AND DIM	= pDIM
+                AND SUPPLIER_CD = pSUPPLIER_CD
+                AND CLASS = pCLASS
+                AND RATIO = pRATIO
+                AND LOGIC = pLOGIC
+                AND PLAN_DATE_REF_DEL_DATE||PLAN_TIME_REF_DEL_ROUND BETWEEN  pNEXT_DEL||'0800'  
+                                                                    AND 
+																			(SELECT to_char(
+																			    to_date(next_working_day, 'YYYYMMDD') + INTERVAL '1 day',
+																			    'YYYYMMDD'
+																			)
+                                                                        FROM (  SELECT MIN(DT_WORK) AS NEXT_WORKING_DAY 
+																		FROM dosystem.WBGZT051 
+                                                                                WHERE MK_WORK = 'Y' AND DT_WORK > pNEXT_DEL
+                                                                              ))||'0759'
+    LOOP
+        -- TODO: logic	
+		BEGIN
+		    INSERT INTO dosystem.T_PRD_DO_RESULT
+                                    (FACTORY_CD,
+                                        DELIVERY_DATE,
+                                        DELIVERY_TIME,
+                                        DELIVERY_ORDER,
+                                        BLOCK_CD,
+                                        RESULT,
+                                        UPDATE_DATE,
+                                        PLAN_DATE,
+                                        PLAN_TIME,
+                                        PART_NO,
+                                        DIM,
+                                        SUPPLIER_CD,
+                                        RATIO,
+                                        CLASS,
+                                        LOGIC,
+                                        CD_SPLY_FACT)
+                            VALUES (REC1.FACTORY_CD,
+                                    REC1.PLAN_DATE_REF_DEL_DATE,
+                                    REC1.PLAN_TIME_REF_DEL_ROUND,
+                                    REC1.PLAN_QTY,
+                                    REC1.USE_BLOCK_CD,
+                                    REC1.COMMENT_MSG,
+                                    CURRENT_DATE,
+                                    REC1.PLAN_DATE,
+                                    REC1.PLAN_TIME,
+                                    REC1.PART_NO,
+                                    REC1.DIM,
+                                    REC1.SUPPLIER_CD,
+                                    REC1.RATIO,
+                                    REC1.CLASS,
+                                    pLOGIC,
+                                    pCD_SPLY_FACT);        
+                                    
+                        EXCEPTION
+                        WHEN OTHERS THEN
+                           NULL ;
+						END;						
+    END LOOP;
+
+--#Case Result is OK
+
+                BEGIN            
+                SELECT DISTINCT FLG_IN_HOUSE INTO vFLG_IN_HOUSE  
+                FROM dosystem.T_PRD_DO_DELIVERY_MASTER
+                    WHERE EFFECT_STA_DATE||FACTORY_CD||SUPPLIER_CD IN (
+                     SELECT MAX(EFFECT_STA_DATE)||FACTORY_CD||SUPPLIER_CD FROM T_PRD_DO_DELIVERY_MASTER 
+                     WHERE  FACTORY_CD = pFACTORY_CD
+                     AND SUPPLIER_CD = pSUPPLIER_CD
+                     AND EFFECT_STA_DATE <= pNEXT_DEL
+                     GROUP BY FACTORY_CD,SUPPLIER_CD);
+                    
+ 
+                EXCEPTION WHEN NO_DATA_FOUND THEN                                  
+                        vFLG_IN_HOUSE := NULL;                         
+                END;
+
+IF vFLG_IN_HOUSE = 'Y' THEN
+
+	FOR rec3 in 
+	SELECT DISTINCT FACTORY_CD,PART_NO,DIM,USE_BLOCK_CD,SUPPLIER_CD,CLASS,PLAN_DATE_REF_DEL_DATE,PLAN_TIME_REF_DEL_ROUND,COMMENT_MSG,SUM(PLAN_QTY)AS PLAN_QTY,PLAN_DATE,PLAN_TIME
+                FROM dosystem.t_do_plan_ref_delivery_date
+                WHERE PLAN_DATE_REF_DEL_DATE||PLAN_TIME_REF_DEL_ROUND BETWEEN  pNEXT_DEL||'0800'  
+                                                                    AND (SELECT TO_CHAR(TO_DATE(NEXT_WORKING_DAY,'YYYYMMDD')+ INTERVAL '1 day','YYYYMMDD')
+                                                                        FROM (  SELECT MIN(DT_WORK) AS NEXT_WORKING_DAY FROM dosystem.WBGZT051 
+                                                                                WHERE MK_WORK = 'Y' AND DT_WORK > pNEXT_DEL
+                                                                              ))||'0759'              
+                    AND PLAN_QTY > 0
+                    AND FACTORY_CD = pFACTORY_CD	
+                    AND PART_NO	= pPART_NO
+                    AND DIM	= pDIM
+                    AND SUPPLIER_CD = pSUPPLIER_CD
+                    AND CLASS = pCLASS
+                    AND COMMENT_MSG = 'WF0000'
+                    AND LOGIC = pLOGIC
+                    AND RATIO = pRATIO
+                    AND CD_SPLY_FACT = pCD_SPLY_FACT
+                GROUP BY FACTORY_CD,PART_NO,DIM,USE_BLOCK_CD,SUPPLIER_CD,CLASS,PLAN_DATE_REF_DEL_DATE,PLAN_TIME_REF_DEL_ROUND,COMMENT_MSG,PLAN_DATE,PLAN_TIME  
+                ORDER BY PLAN_DATE_REF_DEL_DATE,PLAN_TIME_REF_DEL_ROUND
+	LOOP
+                        BEGIN
+                        
+                        
+                                                INSERT INTO dosystem.T_PRD_DO_RESULT
+                                                            (FACTORY_CD,
+                                                                DELIVERY_KEY,
+                                                                DELIVERY_DATE,
+                                                                DELIVERY_TIME,
+                                                                DELIVERY_ORDER,
+                                                                BLOCK_CD,
+                                                                DELIVERY_LOCATION,
+                                                                RESULT,
+                                                                UPDATE_DATE,
+                                                                PLAN_DATE,
+                                                                PLAN_TIME,
+                                                                PART_NO,
+                                                                DIM,
+                                                                SUPPLIER_CD,
+                                                                RATIO,
+                                                                CLASS,
+                                                                LOGIC,
+                                                                CD_SPLY_FACT)
+                                                    VALUES (pFACTORY_CD,
+                                                            NULL,
+                                                            REC3.PLAN_DATE_REF_DEL_DATE,
+                                                            REC3.PLAN_TIME_REF_DEL_ROUND,
+                                                            REC3.PLAN_QTY,
+                                                            pUSE_BLOCK_CD,
+                                                            NULL,
+                                                            'WF0000',
+                                                            CURRENT_DATE,
+                                                            REC3.PLAN_DATE,
+                                                            REC3.PLAN_TIME,
+                                                            pPART_NO,
+                                                            pDIM,
+                                                            pSUPPLIER_CD,
+                                                            pRATIO,
+                                                            pCLASS,
+                                                            pLOGIC,
+                                                            pCD_SPLY_FACT);
+                                                EXCEPTION
+                                                WHEN OTHERS THEN
+                                                   NULL ;
+                                
+                        END;
+                        END LOOP; -- END LOOP CUR 3
+ 
+ELSE 
+                         
+--Set Initial Data
+V_ROW_CNT := 0;
+V_QT_BAL_PLAN := NULL;
+V_QT_BAL_PO := 0;
+-- 2.)  Open CUR 3
+	FOR rec3 in 
+	SELECT DISTINCT FACTORY_CD,PART_NO,DIM,USE_BLOCK_CD,SUPPLIER_CD,CLASS,PLAN_DATE_REF_DEL_DATE,PLAN_TIME_REF_DEL_ROUND,COMMENT_MSG,SUM(PLAN_QTY)AS PLAN_QTY,PLAN_DATE,PLAN_TIME
+                FROM dosystem.t_do_plan_ref_delivery_date
+                WHERE PLAN_DATE_REF_DEL_DATE||PLAN_TIME_REF_DEL_ROUND BETWEEN  pNEXT_DEL||'0800'  
+                                                                    AND (SELECT TO_CHAR(TO_DATE(NEXT_WORKING_DAY,'YYYYMMDD')+ INTERVAL '1 day','YYYYMMDD')
+                                                                        FROM (  SELECT MIN(DT_WORK) AS NEXT_WORKING_DAY FROM dosystem.WBGZT051 
+                                                                                WHERE MK_WORK = 'Y' AND DT_WORK > pNEXT_DEL
+                                                                              ))||'0759'              
+                    AND PLAN_QTY > 0
+                    AND FACTORY_CD = pFACTORY_CD	
+                    AND PART_NO	= pPART_NO
+                    AND DIM	= pDIM
+                    AND SUPPLIER_CD = pSUPPLIER_CD
+                    AND CLASS = pCLASS
+                    AND COMMENT_MSG = 'WF0000'
+                    AND LOGIC = pLOGIC
+                    AND RATIO = pRATIO
+                    AND CD_SPLY_FACT = pCD_SPLY_FACT
+                GROUP BY FACTORY_CD,PART_NO,DIM,USE_BLOCK_CD,SUPPLIER_CD,CLASS,PLAN_DATE_REF_DEL_DATE,PLAN_TIME_REF_DEL_ROUND,COMMENT_MSG,PLAN_DATE,PLAN_TIME  
+                ORDER BY PLAN_DATE_REF_DEL_DATE,PLAN_TIME_REF_DEL_ROUND
+	LOOP            
+        V_MIN_DT_DELV := '00000000';
+     --Set Initial Data 
+     V_QT_BAL_PLAN := REC3.PLAN_QTY;
+     
+
+    WHILE V_QT_BAL_PLAN > 0 AND ( V_MIN_DT_DELV <= REC3.PLAN_DATE )
+     LOOP
+        IF V_QT_BAL_PO = 0 THEN
+            BEGIN
+                SELECT *
+                INTO
+                    V_MIN_ROW_NUM,
+                    v_DLV_KEY_NO,
+                    V_QT_BAL_PO,
+                    v_CD_DELV_PLACE,
+                    V_MIN_DT_DELV
+                FROM dosystem.p_prd_do_get_dlv_key_no(
+                    pFACTORY_CD,
+                    pPART_NO,          pDIM,
+                    pUSE_BLOCK_CD,     pSUPPLIER_CD,
+                    V_ROW_CNT::varchar,         pNEXT_DEL
+                );
+                            
+                        EXCEPTION
+                            WHEN OTHERS THEN
+                               NULL ;
+            END;
+            
+               IF ( V_MIN_DT_DELV > REC3.PLAN_DATE  )THEN
+                        V_QT_BAL_PO := 0;
+                        
+                   BEGIN
+                    INSERT INTO dosystem.T_PRD_DO_RESULT
+                                (FACTORY_CD,
+                                    DELIVERY_DATE,
+                                    DELIVERY_TIME,
+                                    DELIVERY_ORDER,
+                                    BLOCK_CD,
+                                    RESULT,
+                                    UPDATE_DATE,
+                                    PLAN_DATE,
+                                    PLAN_TIME,
+                                    PART_NO,
+                                    DIM,
+                                    SUPPLIER_CD,
+                                    RATIO,
+                                    CLASS,
+                                    LOGIC,
+                                    CD_SPLY_FACT)
+                        VALUES (pFACTORY_CD,
+                                REC3.PLAN_DATE_REF_DEL_DATE,
+                                REC3.PLAN_TIME_REF_DEL_ROUND,
+                                V_QT_BAL_PLAN,
+                                pUSE_BLOCK_CD,
+                                'WF0020',
+                                CURRENT_DATE,
+                                REC3.PLAN_DATE,
+                                REC3.PLAN_TIME,
+                                pPART_NO,
+                                pDIM,
+                                pSUPPLIER_CD,
+                                pRATIO,
+                                pCLASS,
+                                pLOGIC,
+                                pCD_SPLY_FACT);
+                    COMMIT;
+                    EXCEPTION
+                    WHEN OTHERS THEN
+                       NULL ;
+                END;
+                --แก้ 11/3/26
+			-- [เพิ่ม 2 บรรทัดนี้ตรงนี้] --
+            --V_QT_BAL_PO := NULL;
+            --V_QT_BAL_PLAN := 0;
+            --------------------------				
+            END IF;
+            
+        ELSIF V_QT_BAL_PO > 0 THEN
+            BEGIN
+                IF V_QT_BAL_PLAN > V_QT_BAL_PO THEN
+                    BEGIN
+                        BEGIN
+                            INSERT INTO dosystem.T_PRD_DO_RESULT
+                                        (FACTORY_CD,
+                                            DELIVERY_KEY,
+                                            DELIVERY_DATE,
+                                            DELIVERY_TIME,
+                                            DELIVERY_ORDER,
+                                            BLOCK_CD,
+                                            DELIVERY_LOCATION,
+                                            RESULT,
+                                            UPDATE_DATE,
+                                            PLAN_DATE,
+                                            PLAN_TIME,
+                                            PART_NO,
+                                            DIM,
+                                            SUPPLIER_CD,
+                                            RATIO,
+                                            CLASS,
+                                            LOGIC,
+                                            CD_SPLY_FACT)
+                                VALUES (pFACTORY_CD,
+                                        v_DLV_KEY_NO,
+                                        REC3.PLAN_DATE_REF_DEL_DATE,
+                                        REC3.PLAN_TIME_REF_DEL_ROUND,
+                                        V_QT_BAL_PO,
+                                        pUSE_BLOCK_CD,
+                                        v_CD_DELV_PLACE,
+                                        'WF0000',
+                                        CURRENT_DATE,
+                                        REC3.PLAN_DATE,
+                                        REC3.PLAN_TIME,
+                                        pPART_NO,
+                                        pDIM,
+                                        pSUPPLIER_CD,
+                                        pRATIO,
+                                        pCLASS,
+                                        pLOGIC,
+                                        pCD_SPLY_FACT);
+                            COMMIT;
+                            EXCEPTION
+                            WHEN OTHERS THEN
+                               NULL ;
+                        END;
+                        --Set Value
+                        V_QT_BAL_PLAN := V_QT_BAL_PLAN - V_QT_BAL_PO;
+                        V_QT_BAL_PO := 0;
+                        V_ROW_CNT := V_MIN_ROW_NUM;
+                        
+                    END;
+                
+                ELSIF  V_QT_BAL_PLAN <= V_QT_BAL_PO THEN
+                    BEGIN
+                        BEGIN
+                            INSERT INTO dosystem.T_PRD_DO_RESULT
+                                        (FACTORY_CD,
+                                            DELIVERY_KEY,
+                                            DELIVERY_DATE,
+                                            DELIVERY_TIME,
+                                            DELIVERY_ORDER,
+                                            BLOCK_CD,
+                                            DELIVERY_LOCATION,
+                                            RESULT,
+                                            UPDATE_DATE,
+                                            PLAN_DATE,
+                                            PLAN_TIME,
+                                            PART_NO,
+                                            DIM,
+                                            SUPPLIER_CD,
+                                            RATIO,
+                                            CLASS,
+                                            LOGIC,
+                                            CD_SPLY_FACT)
+                                VALUES (pFACTORY_CD,
+                                        v_DLV_KEY_NO,
+                                        REC3.PLAN_DATE_REF_DEL_DATE,
+                                        REC3.PLAN_TIME_REF_DEL_ROUND,
+                                        V_QT_BAL_PLAN,
+                                        pUSE_BLOCK_CD,
+                                        v_CD_DELV_PLACE,
+                                        'WF0000',
+                                        CURRENT_DATE,
+                                        REC3.PLAN_DATE,
+                                        REC3.PLAN_TIME,
+                                        pPART_NO,
+                                        pDIM,
+                                        pSUPPLIER_CD,
+                                        pRATIO,
+                                        pCLASS,
+                                        pLOGIC,
+                                        pCD_SPLY_FACT);
+                            COMMIT;
+                            EXCEPTION
+                            WHEN OTHERS THEN
+                               NULL ;
+                        END;										            
+                        --Set Value
+                        V_QT_BAL_PO := V_QT_BAL_PO - V_QT_BAL_PLAN;
+                        V_QT_BAL_PLAN := 0;
+                        V_ROW_CNT := V_MIN_ROW_NUM;
+                    END;
+                END IF; --V_QT_BAL_PLAN > V_QT_BAL_PO 
+                
+            END;
+        ELSIF V_QT_BAL_PO IS NULL THEN 
+            BEGIN
+                BEGIN
+                    INSERT INTO dosystem.T_PRD_DO_RESULT
+                                (FACTORY_CD,
+                                    DELIVERY_DATE,
+                                    DELIVERY_TIME,
+                                    DELIVERY_ORDER,
+                                    BLOCK_CD,
+                                    RESULT,
+                                    UPDATE_DATE,
+                                    PLAN_DATE,
+                                    PLAN_TIME,
+                                    PART_NO,
+                                    DIM,
+                                    SUPPLIER_CD,
+                                    RATIO,
+                                    CLASS,
+                                    LOGIC,
+                                    CD_SPLY_FACT)
+                        VALUES (pFACTORY_CD,
+                                REC3.PLAN_DATE_REF_DEL_DATE,
+                                REC3.PLAN_TIME_REF_DEL_ROUND,
+                                V_QT_BAL_PLAN,
+                                pUSE_BLOCK_CD,
+                                'WF0020',
+                                CURRENT_DATE,
+                                REC3.PLAN_DATE,
+                                REC3.PLAN_TIME,
+                                pPART_NO,
+                                pDIM,
+                                pSUPPLIER_CD,
+                                pRATIO,
+                                pCLASS,
+                                pLOGIC,
+                                pCD_SPLY_FACT);
+                    COMMIT;
+                    EXCEPTION
+                    WHEN OTHERS THEN
+                       NULL ;
+                END;
+                --Set Value
+                V_QT_BAL_PO := NULL;
+                V_QT_BAL_PLAN := 0;				
+            END;
+
+        END IF;
+     END LOOP;
+    
+END LOOP; -- END LOOP CUR 3  
+END IF ;
+
+-- #Summary Qty for return
+BEGIN
+    SELECT SUM(DELIVERY_ORDER) AS SUM_QTY_DO INTO pSUM_QTY_DO
+    FROM dosystem.T_PRD_DO_RESULT
+    WHERE FACTORY_CD = pFACTORY_CD
+    AND RESULT = 'WF0000'
+    AND BLOCK_CD = pUSE_BLOCK_CD
+    AND SUPPLIER_CD = pSUPPLIER_CD
+    AND PART_NO = pPART_NO
+    AND DIM = pDIM
+    AND RATIO = pRATIO
+    AND CLASS = pCLASS
+    AND LOGIC = pLOGIC
+    AND PLAN_DATE||PLAN_TIME >= pNEXT_DEL||'0800';
+    
+    EXCEPTION WHEN NO_DATA_FOUND THEN
+    pSUM_QTY_DO := NULL;  
+END;
+
+IF pSUM_QTY_DO IS NULL THEN
+    pSUM_QTY_DO := 0 ;
+END IF ;
+
+END;
+$BODY$;
+
+ALTER FUNCTION dosystem.p_prd_do_issue_do_multi_rate(character varying, character varying, character varying, character varying, character varying, character varying, numeric, character varying, smallint, character varying)
+    OWNER TO dosystem;

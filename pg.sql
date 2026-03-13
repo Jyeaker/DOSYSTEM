@@ -2827,14 +2827,20 @@ V_QT_BAL_PO := 0;
      LOOP
         IF V_QT_BAL_PO = 0 THEN
             BEGIN
-                select * from dosystem.p_prd_do_get_dlv_key_no( pFACTORY_CD,
-                                         pPART_NO,          pDIM,              
-                                         pUSE_BLOCK_CD,     pSUPPLIER_CD,
-                                         V_ROW_CNT,         pNEXT_DEL,    
-                                         V_MIN_ROW_NUM,
-                                         v_DLV_KEY_NO,          V_QT_BAL_PO,
-                                         v_CD_DELV_PLACE ,V_MIN_DT_DELV);
-                            
+                SELECT *
+                INTO
+                    V_MIN_ROW_NUM,
+                    v_DLV_KEY_NO,
+                    V_QT_BAL_PO,
+                    v_CD_DELV_PLACE,
+                    V_MIN_DT_DELV
+                FROM dosystem.p_prd_do_get_dlv_key_no(
+                    pFACTORY_CD,
+                    pPART_NO,          pDIM,
+                    pUSE_BLOCK_CD,     pSUPPLIER_CD,
+                    V_ROW_CNT::varchar,         pNEXT_DEL
+                );
+
                         EXCEPTION
                             WHEN OTHERS THEN
                                NULL ;
@@ -2882,13 +2888,9 @@ V_QT_BAL_PO := 0;
                     WHEN OTHERS THEN
                        NULL ;
                 END;
-                --แก้ 11/3/26
-			-- [เพิ่ม 2 บรรทัดนี้ตรงนี้] --
-            V_QT_BAL_PO := NULL;
-            V_QT_BAL_PLAN := 0;
-            --------------------------				
+
             END IF;
-            
+
         ELSIF V_QT_BAL_PO > 0 THEN
             BEGIN
                 IF V_QT_BAL_PLAN > V_QT_BAL_PO THEN
@@ -3037,13 +3039,10 @@ V_QT_BAL_PO := 0;
                     WHEN OTHERS THEN
                        NULL ;
                 END;
-                --Comment 11/3/26
-                --V_QT_BAL_PO := NULL;
-                --V_QT_BAL_PLAN := 0;
+                --Set Value
+                V_QT_BAL_PO := NULL;
+                V_QT_BAL_PLAN := 0;
             END;
-			-- [เพิ่ม 1 บรรทัดนี้ตรงนี้] --
-        	V_QT_BAL_PLAN := 0;
-        	--------------------------
         END IF;
      END LOOP;
     
@@ -3423,11 +3422,7 @@ END;
                                                                                     REC2.CD_SPLY_FACT);
                                                                         EXCEPTION WHEN OTHERS THEN NULL ;
                                                                     END;
-                                                	--แก้ 11/3/26
-													-- [เพิ่ม 2 บรรทัดนี้ตรงนี้] --
-										            V_QT_BAL_PO := NULL;
-										            V_QT_BAL_PLAN := 0;
-										            --------------------------
+
                                                     END IF;
                                             
                                         ELSIF  V_QT_BAL_PO > 0 THEN
@@ -3588,13 +3583,9 @@ END;
                                                     EXCEPTION WHEN OTHERS THEN NULL ;
                                                 END;
                                                 --Set Value
-												/*commemt 11/3/26
                                                 V_QT_BAL_PO := NULL;
                                                 V_QT_BAL_PLAN := 0;
-												*/
                                             END;
-											--แก้ 11/3/26
-											V_QT_BAL_PLAN := 0;
                                         END IF;
                                      END LOOP; -- While
 

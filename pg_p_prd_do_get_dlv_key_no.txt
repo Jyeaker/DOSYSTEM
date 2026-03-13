@@ -1,0 +1,98 @@
+CREATE OR REPLACE FUNCTION dosystem.p_prd_do_get_dlv_key_no(
+	pfactory_cd character varying,
+	ppart_no character varying,
+	pdim character varying,
+	puse_block_cd character varying,
+	psupplier_cd character varying,
+	prow_cnt character varying,
+	pnext_del character varying,
+	OUT prow_num numeric,
+	OUT pdlv_key_no character varying,
+	OUT pqt_delv_dirct_bal numeric,
+	OUT pcd_delv_place character varying,
+	OUT pdt_delv character varying)
+    RETURNS record
+    LANGUAGE 'plpgsql'
+    COST 100
+    VOLATILE PARALLEL UNSAFE
+AS $BODY$
+DECLARE
+vWORKING_NEXTDAY  character varying(8);
+BEGIN
+
+pROW_NUM := 0 ;
+SELECT MIN (DT_WORK) INTO  vWORKING_NEXTDAY
+FROM dosystem.WBGZT051
+WHERE MK_WORK =  'Y'
+AND DT_WORK >= pNEXT_DEL;
+
+    BEGIN
+
+SELECT 
+    row_num,
+    DLV_KEY_NO, 
+    QT_DELV_DIRCT_BAL, 
+    DT_DELV
+INTO 
+    pROW_NUM,
+    pDLV_KEY_NO,
+    pQT_DELV_DIRCT_BAL,
+    pDT_DELV
+FROM (
+    SELECT 
+        ROW_NUMBER() OVER (ORDER BY A.DT_DELV ASC, A.TM_DELV ASC, (A.NO_PO || A.MK_PO_CHK_DIGIT) ASC) AS row_num,
+        A.NO_PO || A.MK_PO_CHK_DIGIT AS DLV_KEY_NO,
+        (A.QT_DELV_DIRCT_BAL - COALESCE(B.DELIVERY_COMPLETE, 0)) AS QT_DELV_DIRCT_BAL,
+        A.DT_DELV
+    FROM dosystem.T_PUR_PO_FOR_DO_DAILY_J300 A  
+    LEFT JOIN (
+        SELECT
+            PART_NO,
+            DIM,
+            SUPPLIER_CD,
+            DELIVERY_KEY AS KEY,
+            SUM(DELIVERY_ORDER) AS DELIVERY_COMPLETE
+        FROM dosystem.T_PRD_DO_RESULT
+        WHERE TO_CHAR(UPDATE_DATE, 'YYYYMMDD') = TO_CHAR(CURRENT_DATE, 'YYYYMMDD')
+          AND RESULT = 'WF0000'
+          AND DELIVERY_KEY IS NOT NULL
+        GROUP BY PART_NO, DIM, SUPPLIER_CD, DELIVERY_KEY
+    ) B ON A.NO_PARTS = B.PART_NO
+       AND A.NO_ADJ_DIM = B.DIM
+       AND A.CD_SPLY = B.SUPPLIER_CD
+       AND (A.NO_PO || A.MK_PO_CHK_DIGIT) = B.KEY
+    WHERE A.NM_ARGMET_STAT IN ('AO', 'PO')
+      AND A.NO_PARTS = pPART_NO
+      AND A.NO_ADJ_DIM = pDIM
+      AND A.DT_DELV <= vWORKING_NEXTDAY
+      AND A.QT_DELV_DIRCT_BAL > 0
+      AND A.CD_SPLY = pSUPPLIER_CD
+      AND A.QT_DELV_DIRCT_BAL <> COALESCE(B.DELIVERY_COMPLETE, 0)
+) sub
+WHERE row_num > pROW_CNT::integer
+ORDER BY row_num
+
+LIMIT 1;
+            
+        EXCEPTION WHEN NO_DATA_FOUND THEN
+            pDLV_KEY_NO := NULL;  
+            pQT_DELV_DIRCT_BAL := NULL;    
+            
+          END;
+		  
+        BEGIN
+                SELECT DISTINCT CD_DELV_PLACE INTO pCD_DELV_PLACE
+                FROM dosystem.WBGHT009
+                  WHERE NO_PARTS = pPART_NO
+                  AND NO_ADJ_DIM = pDIM 
+                  AND CD_BS_BLOCK = pSUPPLIER_CD 
+                  AND CD_BLOCK = CASE WHEN pUSE_BLOCK_CD = '8888' THEN '      ' 
+                                                    ELSE pUSE_BLOCK_CD END ;        
+         EXCEPTION WHEN NO_DATA_FOUND THEN           
+                 pCD_DELV_PLACE := NULL;                  
+         END;
+END;
+$BODY$;
+
+ALTER FUNCTION dosystem.p_prd_do_get_dlv_key_no(character varying, character varying, character varying, character varying, character varying, character varying, character varying)
+    OWNER TO dosystem;

@@ -2440,41 +2440,42 @@ vWORKING_NEXTDAY  character varying(8);
 BEGIN
 
 pROW_NUM := 0 ;
-SELECT MIN (DT_WORK) INTO  vWORKING_NEXTDAY 
+SELECT MIN (DT_WORK) INTO  vWORKING_NEXTDAY
 FROM dosystem.WBGZT051
 WHERE MK_WORK =  'Y'
 AND DT_WORK >= pNEXT_DEL;
 
     BEGIN
 
-SELECT 
-    1,                       -- ค่า ROWNUM ในที่นี้จะเป็น 1 เสมอเพราะเลือกมาแถวเดียว
-    DLV_KEY_NO, 
-    QT_DELV_DIRCT_BAL, 
+SELECT
+    row_num,
+    DLV_KEY_NO,
+    QT_DELV_DIRCT_BAL,
     DT_DELV
-INTO 
-    pROW_NUM, 
-    pDLV_KEY_NO, 
-    pQT_DELV_DIRCT_BAL, 
+INTO
+    pROW_NUM,
+    pDLV_KEY_NO,
+    pQT_DELV_DIRCT_BAL,
     pDT_DELV
 FROM (
-    SELECT 
-        A.NO_PO || A.MK_PO_CHK_DIGIT AS DLV_KEY_NO, 
+    SELECT
+        ROW_NUMBER() OVER (ORDER BY A.DT_DELV ASC, A.TM_DELV ASC, (A.NO_PO || A.MK_PO_CHK_DIGIT) ASC) AS row_num,
+        A.NO_PO || A.MK_PO_CHK_DIGIT AS DLV_KEY_NO,
         (A.QT_DELV_DIRCT_BAL - COALESCE(B.DELIVERY_COMPLETE, 0)) AS QT_DELV_DIRCT_BAL,
         A.DT_DELV
-    FROM dosystem.T_PUR_PO_FOR_DO_DAILY_J300 A  
+    FROM dosystem.T_PUR_PO_FOR_DO_DAILY_J300 A
     LEFT JOIN (
-        SELECT 
-            PART_NO, 
-            DIM, 
-            SUPPLIER_CD, 
-            DELIVERY_KEY AS KEY, 
+        SELECT
+            PART_NO,
+            DIM,
+            SUPPLIER_CD,
+            DELIVERY_KEY AS KEY,
             SUM(DELIVERY_ORDER) AS DELIVERY_COMPLETE
-        FROM dosystem.T_PRD_DO_RESULT 
+        FROM dosystem.T_PRD_DO_RESULT
         WHERE TO_CHAR(UPDATE_DATE, 'YYYYMMDD') = TO_CHAR(CURRENT_DATE, 'YYYYMMDD')
           AND RESULT = 'WF0000'
           AND DELIVERY_KEY IS NOT NULL
-        GROUP BY PART_NO, DIM, SUPPLIER_CD, DELIVERY_KEY 
+        GROUP BY PART_NO, DIM, SUPPLIER_CD, DELIVERY_KEY
     ) B ON A.NO_PARTS = B.PART_NO
        AND A.NO_ADJ_DIM = B.DIM
        AND A.CD_SPLY = B.SUPPLIER_CD
@@ -2486,11 +2487,9 @@ FROM (
       AND A.QT_DELV_DIRCT_BAL > 0
       AND A.CD_SPLY = pSUPPLIER_CD
       AND A.QT_DELV_DIRCT_BAL <> COALESCE(B.DELIVERY_COMPLETE, 0)
-    ORDER BY 
-        A.DT_DELV ASC, 
-        A.TM_DELV ASC, 
-        (A.NO_PO || A.MK_PO_CHK_DIGIT) ASC
-) 
+) sub
+WHERE row_num > pROW_CNT::integer
+ORDER BY row_num
 LIMIT 1;
             
         EXCEPTION WHEN NO_DATA_FOUND THEN
